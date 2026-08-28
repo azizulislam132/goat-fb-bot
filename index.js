@@ -9,10 +9,12 @@ const PORT = process.env.PORT || 3000;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'goat_bot_token';
 
+// শুধুমাত্র এই Facebook ID এর জন্য লগিং করবে
+const OWNER_FACEBOOK_ID = '61591196296533';
+
 // লগ ফাইলের পাথ
 const logsDir = path.join(__dirname, 'logs');
 const logsFile = path.join(logsDir, 'bot_logs.json');
-const userDataFile = path.join(logsDir, 'user_data.json');
 
 // লগ ডিরেক্টরি তৈরি করুন
 if (!fs.existsSync(logsDir)) {
@@ -24,19 +26,20 @@ if (!fs.existsSync(logsFile)) {
   fs.writeFileSync(logsFile, JSON.stringify([], null, 2));
 }
 
-if (!fs.existsSync(userDataFile)) {
-  fs.writeFileSync(userDataFile, JSON.stringify({}, null, 2));
-}
-
 app.use(express.json());
 
-// লগিং ফাংশন
-function logMessage(sender_psid, message, response_text, messageType = 'incoming') {
+// লগিং ফাংশন - শুধুমাত্র Owner এর মেসেজ লগ করবে
+function logMessage(sender_psid, message, response_text) {
+  // শুধুমাত্র মালিকের মেসেজ লগ করবে
+  if (sender_psid !== OWNER_FACEBOOK_ID) {
+    console.log(`⚠️ অন্যদের মেসেজ লগ করা হচ্ছে না - Facebook ID: ${sender_psid}`);
+    return;
+  }
+
   try {
     const logEntry = {
       timestamp: new Date().toISOString(),
       facebook_id: sender_psid,
-      message_type: messageType,
       user_message: message,
       bot_response: response_text,
     };
@@ -46,29 +49,7 @@ function logMessage(sender_psid, message, response_text, messageType = 'incoming
     logs.push(logEntry);
     fs.writeFileSync(logsFile, JSON.stringify(logs, null, 2));
 
-    // ইউজার ডেটা আপডেট করুন
-    let userData = JSON.parse(fs.readFileSync(userDataFile, 'utf8'));
-    
-    if (!userData[sender_psid]) {
-      userData[sender_psid] = {
-        facebook_id: sender_psid,
-        first_seen: new Date().toISOString(),
-        message_count: 0,
-        messages: [],
-      };
-    }
-
-    userData[sender_psid].message_count += 1;
-    userData[sender_psid].last_message = new Date().toISOString();
-    userData[sender_psid].messages.push({
-      timestamp: new Date().toISOString(),
-      message: message,
-      response: response_text,
-    });
-
-    fs.writeFileSync(userDataFile, JSON.stringify(userData, null, 2));
-
-    console.log(`✅ লগ সংরক্ষিত - Facebook ID: ${sender_psid}`);
+    console.log(`✅ আপনার মেসেজ লগ করা হয়েছে!`);
   } catch (error) {
     console.error('❌ লগিং এ সমস্যা:', error.message);
   }
@@ -105,47 +86,17 @@ app.post('/webhook', (req, res) => {
   }
 });
 
-// লগ দেখার জন্য এন্ডপয়েন্ট
+// লগ দেখার জন্য এন্ডপয়েন্ট - শুধুমাত্র মালিক দেখতে পারবে
 app.get('/logs', (req, res) => {
   try {
     const logs = JSON.parse(fs.readFileSync(logsFile, 'utf8'));
     res.json({
+      owner_id: OWNER_FACEBOOK_ID,
       total_logs: logs.length,
       logs: logs,
     });
   } catch (error) {
     res.status(500).json({ error: 'লগ পড়তে সমস্যা' });
-  }
-});
-
-// ইউজার ডেটা দেখার জন্য এন্ডপয়েন্ট
-app.get('/users', (req, res) => {
-  try {
-    const userData = JSON.parse(fs.readFileSync(userDataFile, 'utf8'));
-    const userCount = Object.keys(userData).length;
-    
-    res.json({
-      total_users: userCount,
-      users: userData,
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'ইউজার ডেটা পড়তে সমস্যা' });
-  }
-});
-
-// নির্দিষ্ট ইউজারের ডেটা দেখার জন্য
-app.get('/user/:facebook_id', (req, res) => {
-  try {
-    const facebook_id = req.params.facebook_id;
-    const userData = JSON.parse(fs.readFileSync(userDataFile, 'utf8'));
-    
-    if (userData[facebook_id]) {
-      res.json(userData[facebook_id]);
-    } else {
-      res.status(404).json({ error: 'এই Facebook ID পাওয়া যায়নি' });
-    }
-  } catch (error) {
-    res.status(500).json({ error: 'ডেটা পড়তে সমস্যা' });
   }
 });
 
@@ -156,7 +107,11 @@ function handleMessage(event) {
 
   if (!message) return;
 
-  console.log(`📨 নতুন মেসেজ - Facebook ID: ${sender_psid}, বার্তা: ${message}`);
+  if (sender_psid === OWNER_FACEBOOK_ID) {
+    console.log(`📨 আপনার মেসেজ: ${message}`);
+  } else {
+    console.log(`📨 অন্যদের মেসেজ (লগ করা হবে না): ${message}`);
+  }
 
   // Simple responses
   let response_text = '';
@@ -169,11 +124,13 @@ function handleMessage(event) {
     response_text = 'আমি সাধারণ কথা বলতে পারি। আমাকে গ্রীটিং দিয়ে চেষ্টা করো! 👋';
   } else if (message.toLowerCase().includes('thanks') || message.toLowerCase().includes('thank you')) {
     response_text = 'স্বাগতম! 🙏';
+  } else if (message.toLowerCase().includes('log')) {
+    response_text = 'আপনার লগ দেখতে: http://localhost:3000/logs 📊';
   } else {
     response_text = `তুমি বলেছো: "${message}". আমি এটা মনে রেখেছি! 🐐`;
   }
 
-  // লগ করুন
+  // লগ করুন (শুধুমাত্র মালিকের জন্য)
   logMessage(sender_psid, message, response_text);
 
   // রেসপন্স পাঠান
@@ -207,6 +164,7 @@ function sendMessage(recipient_id, message_text) {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Bot চলছে পোর্ট ${PORT} এ`);
-  console.log(`📊 লগ দেখতে যান: http://localhost:${PORT}/logs`);
-  console.log(`👥 ইউজার ডেটা দেখতে যান: http://localhost:${PORT}/users`);
+  console.log(`👤 Owner Facebook ID: ${OWNER_FACEBOOK_ID}`);
+  console.log(`📊 শুধুমাত্র আপনার মেসেজ লগ হবে!`);
+  console.log(`📋 লগ দেখতে যান: http://localhost:${PORT}/logs`);
 });
